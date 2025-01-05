@@ -8,6 +8,8 @@
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
 #include <driver/gpio.h>
 #include <esp_err.h>
 #include <esp_idf_version.h>
@@ -86,10 +88,15 @@ class ESP32RMTLEDStripLightOutput : public light::AddressableLight {
   rmt_symbol_word_t *rmt_buf_{nullptr};
   rmt_symbol_word_t bit0_, bit1_, reset_;
   uint32_t rmt_symbols_;
+
+  static bool _rmt_tx_done_callback(rmt_channel_handle_t channel, const rmt_tx_done_event_data_t *data, void *args);
 #else
+#error wrong idf version
   rmt_item32_t *rmt_buf_{nullptr};
   rmt_item32_t bit0_, bit1_, reset_;
   rmt_channel_t channel_{RMT_CHANNEL_0};
+
+  static bool _rmt_tx_done_callback(rmt_channel_t channel, const rmt_tx_done_event_data_t *data, void *args);
 #endif
 
   uint8_t pin_;
@@ -102,6 +109,8 @@ class ESP32RMTLEDStripLightOutput : public light::AddressableLight {
 
   uint32_t last_refresh_{0};
   optional<uint32_t> max_refresh_rate_{};
+
+  EventGroupHandle_t rmt_events_;   // read/write done event RMT callback handle
 };
 
 }  // namespace esp32_rmt_led_strip

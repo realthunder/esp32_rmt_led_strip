@@ -21,9 +21,32 @@ static const uint32_t RMT_CLK_FREQ = 80000000;
 static const uint8_t RMT_CLK_DIV = 2;
 #endif
 
+#define RMT_FLAG_TX_DONE (2)
+
+// This is called from an IDF ISR code, therefore this code is part of an ISR
+bool ESP32RMTLEDStripLightOutput::_rmt_tx_done_callback(
+        rmt_channel_handle_t channel, const rmt_tx_done_event_data_t *data, void *args)
+{
+  ESP32RMTLEDStripLightOutput *self = (ESP32RMTLEDStripLightOutput*)args;
+  BaseType_t high_task_wakeup = pdFALSE;
+  // set RX event group and signal the received RMT symbols of that channel
+  xEventGroupSetBitsFromISR(self->rmt_events_, RMT_FLAG_TX_DONE, &high_task_wakeup);
+  // A "need to yield" is returned in order to execute portYIELD_FROM_ISR() in the main IDF RX ISR
+  return high_task_wakeup == pdTRUE;
+}
+
 void ESP32RMTLEDStripLightOutput::setup() {
   ESP_LOGCONFIG(TAG, "Setting up ESP32 LED Strip...");
 
+  this->rmt_events_ = xEventGroupCreate();
+  if (this->rmt_events_ == nullptr) {
+    ESP_LOGE(TAG, "RMT Group Event allocation fault.");
+    this->mark_failed();
+    return;
+  }
+
+  // Starting with Transmit DONE bits set, for allowing a new request from user
+  xEventGroupSetBits(this->rmt_events_, RMT_FLAG_TX_DONE);
   size_t buffer_size = this->get_buffer_size_();
 
   RAMAllocator<uint8_t> allocator(this->use_psram_ ? 0 : RAMAllocator<uint8_t>::ALLOC_INTERNAL);
@@ -61,6 +84,13 @@ void ESP32RMTLEDStripLightOutput::setup() {
   channel.intr_priority = 0;
   if (rmt_new_tx_channel(&channel, &this->channel_) != ESP_OK) {
     ESP_LOGE(TAG, "Channel creation failed");
+    this->mark_failed();
+    return;
+  }
+
+  rmt_tx_event_callbacks_t cbs = {.on_trans_done = _rmt_tx_done_callback};
+  if (ESP_OK != rmt_tx_register_event_callbacks(this->channel_, &cbs, this)) {
+    ESP_LOGE(TAG, "Error registering TX Callback.");
     this->mark_failed();
     return;
   }
@@ -144,6 +174,21 @@ void ESP32RMTLEDStripLightOutput::write_state(light::LightState *state) {
 
   ESP_LOGVV(TAG, "Writing RGB values to bus...");
 
+#if 1
+  esp_err_t error;
+
+  if ((xEventGroupGetBits(this->rmt_events_) & RMT_FLAG_TX_DONE) == 0) {
+    ESP_LOGE(TAG, "RMT TX timeout");
+    this->status_set_warning();
+    return;
+  }
+  xEventGroupClearBits(this->rmt_events_, RMT_FLAG_TX_DONE);
+
+#else
+  // NOTE! rmt_tx_wait_all_done() DOES NOT guarantee transmit is done. Judging
+  // from idf source code, it only means data has been transfered to internal
+  // buffer.
+  //
 #if ESP_IDF_VERSION_MAJOR >= 5
   esp_err_t error = rmt_tx_wait_all_done(this->channel_, 1000);
 #else
@@ -154,7 +199,9 @@ void ESP32RMTLEDStripLightOutput::write_state(light::LightState *state) {
     this->status_set_warning();
     return;
   }
+
   delayMicroseconds(50);
+#endif
 
   size_t buffer_size = this->get_buffer_size_();
 
@@ -192,7 +239,7 @@ void ESP32RMTLEDStripLightOutput::write_state(light::LightState *state) {
 #else
   error = rmt_write_items(this->channel_, this->rmt_buf_, len, false);
 #endif
-  spi_data->dma_tx_semaphore = xSemaphoreCreateBinary();
+
   if (error != ESP_OK) {
     ESP_LOGE(TAG, "RMT TX error");
     this->status_set_warning();

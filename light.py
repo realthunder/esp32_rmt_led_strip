@@ -65,8 +65,9 @@ CONF_RESET_LOW = "reset_low"
 
 
 def final_validation(config):
-    if not esp32_rmt.use_new_rmt_driver() and CONF_RMT_CHANNEL not in config:
-        raise cv.Invalid("rmt_channel is a required option.")
+    #  if not esp32_rmt.use_new_rmt_driver() and CONF_RMT_CHANNEL not in config:
+    #      raise cv.Invalid("rmt_channel is a required option.")
+    pass
 
 
 FINAL_VALIDATE_SCHEMA = final_validation
@@ -79,16 +80,15 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_NUM_LEDS): cv.positive_not_null_int,
             cv.Required(CONF_RGB_ORDER): cv.enum(RGB_ORDERS, upper=True),
             cv.Optional(CONF_RMT_CHANNEL): cv.All(
-                cv.only_with_arduino, esp32_rmt.validate_rmt_channel(tx=True)
+                #  cv.only_with_arduino,
+                esp32_rmt.validate_rmt_channel(tx=True)
             ),
             cv.SplitDefault(
                 CONF_RMT_SYMBOLS,
                 esp32_idf=64,
                 esp32_s2_idf=64,
                 esp32_s3_idf=48,
-                esp32_c3_idf=48,
-                esp32_c6_idf=48,
-                esp32_h2_idf=48,
+                esp32_c3_idf=48
             ): cv.All(cv.only_with_esp_idf, cv.int_range(min=2)),
             cv.Optional(CONF_MAX_REFRESH_RATE): cv.positive_time_period_microseconds,
             cv.Optional(CONF_CHIPSET): cv.one_of(*CHIPSETS, upper=True),
@@ -164,13 +164,4 @@ async def to_code(config):
     cg.add(var.set_is_rgbw(config[CONF_IS_RGBW]))
     cg.add(var.set_is_wrgb(config[CONF_IS_WRGB]))
     cg.add(var.set_use_psram(config[CONF_USE_PSRAM]))
-
-    if esp32_rmt.use_new_rmt_driver():
-        cg.add(var.set_rmt_symbols(config[CONF_RMT_SYMBOLS]))
-    else:
-        rmt_channel_t = cg.global_ns.enum("rmt_channel_t")
-        cg.add(
-            var.set_rmt_channel(
-                getattr(rmt_channel_t, f"RMT_CHANNEL_{config[CONF_RMT_CHANNEL]}")
-            )
-        )
+    cg.add(var.set_rmt_symbols(config[CONF_RMT_SYMBOLS]))
