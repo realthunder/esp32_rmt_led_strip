@@ -172,16 +172,18 @@ void ESP32RMTLEDStripLightOutput::write_state(light::LightState *state) {
   this->last_refresh_ = now;
   this->mark_shown_();
 
-  ESP_LOGVV(TAG, "Writing RGB values to bus...");
+  // ESP_LOGI(TAG, "Checking led strip bus...");
 
 #if 1
   esp_err_t error;
 
-  if ((xEventGroupGetBits(this->rmt_events_) & RMT_FLAG_TX_DONE) == 0) {
+  if ((xEventGroupWaitBits(this->rmt_events_, RMT_FLAG_TX_DONE,
+              false, true, 500/portTICK_PERIOD_MS) & RMT_FLAG_TX_DONE) == 0) {
     ESP_LOGE(TAG, "RMT TX timeout");
     this->status_set_warning();
     return;
   }
+  // ESP_LOGI(TAG, "Writing RGB values to bus...");
   xEventGroupClearBits(this->rmt_events_, RMT_FLAG_TX_DONE);
 
 #else
