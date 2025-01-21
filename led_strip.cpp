@@ -29,24 +29,21 @@ bool ESP32RMTLEDStripLightOutput::_rmt_tx_done_callback(
 {
   ESP32RMTLEDStripLightOutput *self = (ESP32RMTLEDStripLightOutput*)args;
   BaseType_t high_task_wakeup = pdFALSE;
-  // set RX event group and signal the received RMT symbols of that channel
-  xEventGroupSetBitsFromISR(self->rmt_events_, RMT_FLAG_TX_DONE, &high_task_wakeup);
-  // A "need to yield" is returned in order to execute portYIELD_FROM_ISR() in the main IDF RX ISR
+  xSemaphoreGiveFromISR(self->semaphore_, &high_task_wakeup);
   return high_task_wakeup == pdTRUE;
 }
 
 void ESP32RMTLEDStripLightOutput::setup() {
   ESP_LOGCONFIG(TAG, "Setting up ESP32 LED Strip...");
 
-  this->rmt_events_ = xEventGroupCreate();
-  if (this->rmt_events_ == nullptr) {
-    ESP_LOGE(TAG, "RMT Group Event allocation fault.");
+  this->semaphore_ = xSemaphoreCreateBinary();
+  if (this->semaphore_ == nullptr) {
+    ESP_LOGE(TAG, "RMT allocation fault.");
     this->mark_failed();
     return;
   }
+  xSemaphoreGive(this->semaphore_);
 
-  // Starting with Transmit DONE bits set, for allowing a new request from user
-  xEventGroupSetBits(this->rmt_events_, RMT_FLAG_TX_DONE);
   size_t buffer_size = this->get_buffer_size_();
 
   RAMAllocator<uint8_t> allocator(this->use_psram_ ? 0 : RAMAllocator<uint8_t>::ALLOC_INTERNAL);
@@ -162,29 +159,40 @@ void ESP32RMTLEDStripLightOutput::set_led_params(uint32_t bit0_high, uint32_t bi
 }
 
 void ESP32RMTLEDStripLightOutput::write_state(light::LightState *state) {
+
   // protect from refreshing too often
-  uint32_t now = micros();
-  if (*this->max_refresh_rate_ != 0 && (now - this->last_refresh_) < *this->max_refresh_rate_) {
-    // try again next loop iteration, so that this change won't get lost
-    this->schedule_show();
-    return;
-  }
-  this->last_refresh_ = now;
-  this->mark_shown_();
+  //
+  // uint32_t now = micros();
+  // if (*this->max_refresh_rate_ != 0 && (now - this->last_refresh_) < *this->max_refresh_rate_) {
+  //   // try again next loop iteration, so that this change won't get lost
+  //   this->schedule_show();
+  //   return;
+  // }
+  // this->last_refresh_ = now;
 
   // ESP_LOGI(TAG, "Checking led strip bus...");
 
 #if 1
   esp_err_t error;
 
-  if ((xEventGroupWaitBits(this->rmt_events_, RMT_FLAG_TX_DONE,
-              false, true, 500/portTICK_PERIOD_MS) & RMT_FLAG_TX_DONE) == 0) {
-    ESP_LOGE(TAG, "RMT TX timeout");
-    this->status_set_warning();
+  if (!dirty_)
+      return;
+
+  if (!xSemaphoreTake(this->semaphore_, 100 / portTICK_PERIOD_MS)) {
+    ESP_LOGW(TAG, "time out");
+    this->schedule_show();
     return;
   }
+
+  this->mark_shown_();
+
+  if (!dirty_) {
+    xSemaphoreGive(this->semaphore_);
+    return;
+  }
+  
   // ESP_LOGI(TAG, "Writing RGB values to bus...");
-  xEventGroupClearBits(this->rmt_events_, RMT_FLAG_TX_DONE);
+  dirty_ = false;
 
 #else
   // NOTE! rmt_tx_wait_all_done() DOES NOT guarantee transmit is done. Judging
@@ -245,6 +253,7 @@ void ESP32RMTLEDStripLightOutput::write_state(light::LightState *state) {
   if (error != ESP_OK) {
     ESP_LOGE(TAG, "RMT TX error");
     this->status_set_warning();
+    xSemaphoreGive(this->semaphore_);
     return;
   }
   this->status_clear_warning();
@@ -286,6 +295,7 @@ light::ESPColorView ESP32RMTLEDStripLightOutput::get_view_internal(int32_t index
   }
   uint8_t multiplier = this->is_rgbw_ || this->is_wrgb_ ? 4 : 3;
   uint8_t white = this->is_wrgb_ ? 0 : 3;
+  dirty_ = true;
 
   return {this->buf_ + (index * multiplier) + r + this->is_wrgb_,
           this->buf_ + (index * multiplier) + g + this->is_wrgb_,

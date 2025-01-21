@@ -105,12 +105,14 @@ class ESP32RMTLEDStripLightOutput : public light::AddressableLight {
   bool is_wrgb_;
   bool use_psram_;
 
+  mutable bool dirty_{false};
+
   RGBOrder rgb_order_;
 
   uint32_t last_refresh_{0};
   optional<uint32_t> max_refresh_rate_{};
 
-  EventGroupHandle_t rmt_events_;   // read/write done event RMT callback handle
+  SemaphoreHandle_t semaphore_{0};
 };
 
 }  // namespace esp32_rmt_led_strip
